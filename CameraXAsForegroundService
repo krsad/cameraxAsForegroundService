@@ -1,0 +1,132 @@
+
+
+
+public class CameraXAsForegroundService extends Service implements LifecycleOwner {
+
+
+    Executor executor;
+    private final ServiceLifecycleDispatcher mDispatcher = new ServiceLifecycleDispatcher(this);
+
+    @Override
+    public void onCreate() {
+        mDispatcher.onServicePreSuperOnCreate();
+        super.onCreate();
+
+    }
+
+    @CallSuper
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String input = intent.getStringExtra("inputExtra");
+        Intent notificationIntent = new Intent(this, TengineKitView.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
+
+        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("foreground service")
+                .setContentText(input)
+                .setContentIntent(pendingIntent)
+                .build();
+        startForeground(1, notification);
+
+        startCamera();
+        return START_NOT_STICKY;
+
+    }
+
+    @CallSuper
+    @Override
+    public void onDestroy() {
+        mDispatcher.onServicePreSuperOnDestroy();
+        super.onDestroy();
+
+    }
+
+    @CallSuper
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        mDispatcher.onServicePreSuperOnBind();
+        return null;
+    }
+
+    @SuppressWarnings("deprecation")
+    @CallSuper
+    @Override
+    public void onStart(@Nullable Intent intent, int startId) {
+        mDispatcher.onServicePreSuperOnStart();
+        super.onStart(intent, startId);
+    }
+
+    @NonNull
+    @Override
+    public Lifecycle getLifecycle() {
+        return mDispatcher.getLifecycle();
+    }
+
+
+    private void startCamera() {
+
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                bindPreview(cameraProvider);
+            } catch (ExecutionException | InterruptedException e) {
+                // No errors need to be handled for this Future.
+                // This should never be reached.
+            }
+        }, ContextCompat.getMainExecutor(this));
+    }
+
+    void bindPreview(@NonNull ProcessCameraProvider cameraProvider) {
+
+
+        CameraSelector cameraSelector = new CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                .build();
+
+        executor = Executors.newSingleThreadExecutor();
+
+        ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                //.setTargetResolution(new Size(width,height))
+                .setBackgroundExecutor(executor)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_BLOCK_PRODUCER)
+                .setImageQueueDepth(5)
+                .build();
+
+        imageAnalysis.setAnalyzer(executor, image -> {
+            int rotationDegrees = image.getImageInfo().getRotationDegrees();
+
+
+            byte[] grayImage = ProxyImageToGrayScale(image);
+
+            image.close();
+        });
+
+        cameraProvider.unbindAll();
+        cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis);
+
+
+    }
+
+
+    private byte[] ProxyImageToGrayScale(ImageProxy imageOrg) {
+
+        try (@SuppressLint("UnsafeOptInUsageError") Image image = imageOrg.getImage()) {
+            Image.Plane[] planes = image.getPlanes();
+            ByteBuffer yBuffer = planes[0].getBuffer();
+            ByteBuffer uBuffer = planes[1].getBuffer();
+            ByteBuffer vBuffer = planes[2].getBuffer();
+
+            int ySize = yBuffer.remaining();
+
+
+            byte[] nv21 = new byte[ySize];
+            //U and V are swapped
+            yBuffer.get(nv21, 0, ySize);
+
+            return nv21;
+        }
+    }
+}
